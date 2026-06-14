@@ -1,0 +1,236 @@
+name: Publish to 67minecraft
+
+on:
+  workflow_call:
+    inputs:
+      release-version:
+        description: "GitHub release tag and 67minecraft version number. Defaults to the current ref name."
+        required: false
+        type: string
+        default: ""
+      asset-pattern:
+        description: "GitHub release asset glob to download before publishing."
+        required: false
+        type: string
+        default: "*.jar"
+      primary-file:
+        description: "Primary jar path or release asset name. Auto-detected when unset."
+        required: false
+        type: string
+        default: ""
+      additional-files:
+        description: "Comma or newline-separated additional jar paths or release asset names. Auto-detected when unset."
+        required: false
+        type: string
+        default: ""
+      java-versions:
+        description: "Newline-separated Java versions for setup-java. Defaults to GTNH-style 8, 17, 21, plus gradle-daemon toolchain."
+        required: false
+        type: string
+        default: ""
+      java-distribution:
+        description: "Java distribution for setup-java."
+        required: false
+        type: string
+        default: "zulu"
+      gradle-arguments:
+        description: "Arguments passed to the Gradle publish invocation."
+        required: false
+        type: string
+        default: "--no-configuration-cache --build-cache --info --stacktrace -x test"
+      artifact-task:
+        description: "Compatibility task for older publisher scripts. Set empty after every mod uses the explicit-file-aware publisher."
+        required: false
+        type: string
+        default: "help"
+    secrets:
+      SIX_SEVEN_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    env:
+      RELEASE_VERSION: ${{ inputs.release-version || github.ref_name }}
+      VERSION: ${{ inputs.release-version || github.ref_name }}
+      SIX_SEVEN_TOKEN: ${{ secrets.SIX_SEVEN_TOKEN }}
+
+    steps:
+      - name: Checkout mod repo
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 32
+          submodules: recursive
+
+      - name: Determine JDK versions
+        id: jdk-versions
+        shell: bash
+        env:
+          INPUT_JAVA_VERSIONS: ${{ inputs.java-versions }}
+        run: |
+          if [[ -n "${INPUT_JAVA_VERSIONS//[[:space:]]/}" ]]; then
+            versions="$(printf '%s\n' "$INPUT_JAVA_VERSIONS" | awk 'NF && !seen[$0]++')"
+          else
+            versions="$(
+              {
+                echo 8
+                echo 17
+                echo 21
+                if [[ -f gradle/gradle-daemon-jvm.properties ]]; then
+                  sed -nE 's/^[[:space:]]*toolchainVersion[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' gradle/gradle-daemon-jvm.properties
+                fi
+              } | awk 'NF && !seen[$0]++'
+            )"
+          fi
+
+          {
+            echo 'java-versions<<EOF'
+            printf '%s\n' "$versions"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK versions
+        uses: actions/setup-java@v5
+        with:
+          distribution: ${{ inputs.java-distribution }}
+          java-version: ${{ steps.jdk-versions.outputs.java-versions }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          validate-wrappers: true
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p build/67minecraft
+          gh release download "${RELEASE_VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir build/67minecraft \
+            --pattern "${{ inputs.asset-pattern }}"
+          gh release view "${RELEASE_VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json body \
+            --jq .body > build/67minecraft/changelog.md
+          ls -lh build/67minecraft
+
+      - name: Select 67minecraft files
+        id: files
+        shell: bash
+        env:
+          INPUT_PRIMARY_FILE: ${{ inputs.primary-file }}
+          INPUT_ADDITIONAL_FILES: ${{ inputs.additional-files }}
+        run: |
+          set -euo pipefail
+
+          asset_dir="build/67minecraft"
+          resolve_asset_path() {
+            local value="$1"
+            case "$value" in
+              /*|*/*) printf '%s\n' "$value" ;;
+              *) printf '%s/%s\n' "$asset_dir" "$value" ;;
+            esac
+          }
+
+          mapfile -t jars < <(find "$asset_dir" -maxdepth 1 -type f -name '*.jar' | sort)
+          if ((${#jars[@]} == 0)); then
+            echo "No jar assets were downloaded from release ${RELEASE_VERSION}." >&2
+            exit 1
+          fi
+
+          if [[ -n "${INPUT_PRIMARY_FILE//[[:space:]]/}" ]]; then
+            primary_file="$(resolve_asset_path "$INPUT_PRIMARY_FILE")"
+          else
+            primary_candidates=()
+            for jar in "${jars[@]}"; do
+              base="$(basename "$jar")"
+              [[ "$base" == *-"${RELEASE_VERSION}.jar" ]] || continue
+              [[ "$base" == *-curseforge*.jar ]] && continue
+              case "$base" in
+                *-api.jar|*-dev.jar|*-dev-preshadow.jar|*-javadoc.jar|*-nodep.jar|*-sources.jar) continue ;;
+              esac
+              primary_candidates+=("$jar")
+            done
+
+            if ((${#primary_candidates[@]} != 1)); then
+              echo "Expected exactly one primary jar ending in -${RELEASE_VERSION}.jar, found ${#primary_candidates[@]}." >&2
+              printf 'Downloaded jars:\n' >&2
+              printf '  %s\n' "${jars[@]}" >&2
+              exit 1
+            fi
+            primary_file="${primary_candidates[0]}"
+          fi
+
+          if [[ ! -f "$primary_file" ]]; then
+            echo "Primary 67minecraft file does not exist: $primary_file" >&2
+            exit 1
+          fi
+
+          additional_files=()
+          if [[ -n "${INPUT_ADDITIONAL_FILES//[[:space:],]/}" ]]; then
+            while IFS= read -r item; do
+              item="$(printf '%s' "$item" | xargs)"
+              [[ -n "$item" ]] || continue
+              additional_files+=("$(resolve_asset_path "$item")")
+            done < <(printf '%s\n' "$INPUT_ADDITIONAL_FILES" | tr ',' '\n')
+          else
+            for jar in "${jars[@]}"; do
+              [[ "$jar" == "$primary_file" ]] && continue
+              base="$(basename "$jar")"
+              [[ "$base" == *-curseforge*.jar || "$base" == *-dev-preshadow.jar ]] && continue
+              case "$base" in
+                *-api.jar|*-dev.jar|*-nodep.jar|*-sources.jar) additional_files+=("$jar") ;;
+              esac
+            done
+          fi
+
+          for file in "${additional_files[@]}"; do
+            if [[ ! -f "$file" ]]; then
+              echo "Additional 67minecraft file does not exist: $file" >&2
+              exit 1
+            fi
+          done
+
+          additional_csv=""
+          if ((${#additional_files[@]} > 0)); then
+            IFS=,
+            additional_csv="${additional_files[*]}"
+            unset IFS
+          fi
+
+          echo "Selected primary file: $primary_file"
+          if [[ -n "$additional_csv" ]]; then
+            echo "Selected additional files: $additional_csv"
+          fi
+
+          {
+            echo "primary-file=$primary_file"
+            echo "additional-files=$additional_csv"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish to 67minecraft
+        shell: bash
+        env:
+          GRADLE_ARGUMENTS: ${{ inputs.gradle-arguments }}
+          ARTIFACT_TASK: ${{ inputs.artifact-task }}
+          PRIMARY_FILE: ${{ steps.files.outputs.primary-file }}
+          ADDITIONAL_FILES: ${{ steps.files.outputs.additional-files }}
+        run: |
+          artifact_task_arg=()
+          if [[ -n "${ARTIFACT_TASK//[[:space:]]/}" ]]; then
+            artifact_task_arg=(-P67minecraftArtifactTask="$ARTIFACT_TASK")
+          fi
+
+          ./gradlew publish67Minecraft ${GRADLE_ARGUMENTS} \
+            "${artifact_task_arg[@]}" \
+            -P67minecraftVersionNumber="${RELEASE_VERSION}" \
+            -P67minecraftChangelogFile=build/67minecraft/changelog.md \
+            -P67minecraftFile="$PRIMARY_FILE" \
+            -P67minecraftAdditionalFiles="$ADDITIONAL_FILES"

@@ -1,0 +1,90 @@
+name: GTNH release with 67minecraft
+
+on:
+  workflow_call:
+    inputs:
+      workspace:
+        description: "GTNH workspace task: setupCIWorkspace or setupDecompWorkspace."
+        required: false
+        type: string
+        default: "setupCIWorkspace"
+      release-version:
+        description: "GitHub release tag and 67minecraft version number. Defaults to the current ref name."
+        required: false
+        type: string
+        default: ""
+      asset-pattern:
+        description: "GitHub release asset glob to download before publishing to 67minecraft."
+        required: false
+        type: string
+        default: "*.jar"
+      primary-file:
+        description: "Primary jar path or release asset name for 67minecraft. Auto-detected when unset."
+        required: false
+        type: string
+        default: ""
+      additional-files:
+        description: "Comma or newline-separated additional jar paths or release asset names for 67minecraft. Auto-detected when unset."
+        required: false
+        type: string
+        default: ""
+      java-versions:
+        description: "Newline-separated Java versions for the 67minecraft job. Defaults to GTNH-style 8, 17, 21, plus gradle-daemon toolchain."
+        required: false
+        type: string
+        default: ""
+      java-distribution:
+        description: "Java distribution for the 67minecraft job."
+        required: false
+        type: string
+        default: "zulu"
+      gradle-arguments:
+        description: "Arguments passed to the 67minecraft Gradle publish invocation."
+        required: false
+        type: string
+        default: "--no-configuration-cache --build-cache --info --stacktrace -x test"
+      artifact-task:
+        description: "Compatibility task for older publisher scripts. Set empty after every mod uses the explicit-file-aware publisher."
+        required: false
+        type: string
+        default: "help"
+    secrets:
+      MAVEN_USER:
+        required: false
+      MAVEN_PASSWORD:
+        required: false
+      CURSEFORGE_TOKEN:
+        required: false
+      MODRINTH_TOKEN:
+        required: false
+      SIX_SEVEN_TOKEN:
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release-tags:
+    uses: GTNewHorizons/GTNH-Actions-Workflows/.github/workflows/release-tags.yml@master
+    with:
+      workspace: ${{ inputs.workspace }}
+    secrets:
+      MAVEN_USER: ${{ secrets.MAVEN_USER }}
+      MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+      CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
+      MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+
+  publish-67minecraft:
+    needs: release-tags
+    uses: ./.github/workflows/publish-67minecraft.yml
+    with:
+      release-version: ${{ inputs.release-version }}
+      asset-pattern: ${{ inputs.asset-pattern }}
+      primary-file: ${{ inputs.primary-file }}
+      additional-files: ${{ inputs.additional-files }}
+      java-versions: ${{ inputs.java-versions }}
+      java-distribution: ${{ inputs.java-distribution }}
+      gradle-arguments: ${{ inputs.gradle-arguments }}
+      artifact-task: ${{ inputs.artifact-task }}
+    secrets:
+      SIX_SEVEN_TOKEN: ${{ secrets.SIX_SEVEN_TOKEN }}
