@@ -76,7 +76,7 @@ jobs:
 
   publish-67minecraft:
     needs: release-tags
-    uses: ./.github/workflows/publish-67minecraft.yml
+    uses: AngelicIndustries/67minecraft-gradle-publish/.github/workflows/publish-67minecraft.yml@72186f2f16c887cb296d91681bfd597daddeecb1
     with:
       release-version: ${{ inputs.release-version }}
       asset-pattern: ${{ inputs.asset-pattern }}
