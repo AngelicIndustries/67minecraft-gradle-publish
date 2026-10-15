@@ -567,7 +567,7 @@ val publish67Minecraft = tasks.register("publish67Minecraft") {
 
 		val versionNumber = prop("67minecraftVersionNumber") ?: gtnhModVersion() ?: project.version.toString()
 		val versionName = prop("67minecraftVersionName") ?: versionNumber
-		val apiBase = prop("67minecraftApiUrl") ?: "https://67.fentanylsolutions.org/api/v2"
+		val apiBase = prop("67minecraftApiUrl") ?: "https://67minecraft.com/api/v2"
 		val loaders = splitList(prop("67minecraftLoaders")).ifEmpty { listOf("forge") }
 		val gameVersions = splitList(prop("67minecraftGameVersions")).ifEmpty {
 			listOf(prop("minecraftVersion") ?: "1.7.10")
