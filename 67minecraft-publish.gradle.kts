@@ -539,6 +539,10 @@ val publish67Minecraft = tasks.register("publish67Minecraft") {
 	description = "Publishes this mod version to 67minecraft."
 	notCompatibleWithConfigurationCache("Uploads files from a remote script using project state at execution time.")
 
+	onlyIf("67minecraftProjectId is configured") {
+		prop("67minecraftProjectId") != null
+	}
+
 	doLast {
 		if (!shouldPublishOnCurrentRef()) {
 			println(
@@ -651,6 +655,8 @@ val publish67Minecraft = tasks.register("publish67Minecraft") {
 
 afterEvaluate {
 	publish67Minecraft.configure {
+		if (prop("67minecraftProjectId") == null) return@configure
+
 		val explicitFile = prop("67minecraftFile")
 		val explicitTask = prop("67minecraftArtifactTask")
 		when {

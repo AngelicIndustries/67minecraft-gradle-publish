@@ -58,12 +58,45 @@ on:
       MODRINTH_TOKEN:
         required: false
       SIX_SEVEN_TOKEN:
-        required: true
+        required: false
 
 permissions:
   contents: write
 
 jobs:
+  check-67minecraft:
+    runs-on: ubuntu-24.04
+    outputs:
+      enabled: ${{ steps.project.outputs.enabled }}
+    steps:
+      - name: Checkout mod repo
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: gradle.properties
+          sparse-checkout-cone-mode: false
+
+      - name: Check 67minecraft project ID
+        id: project
+        shell: python
+        run: |
+          import os
+          import re
+          from pathlib import Path
+
+          properties = Path("gradle.properties")
+          project_id = ""
+          if properties.is_file():
+              for line in properties.read_text().splitlines():
+                  match = re.match(r"^\s*67minecraftProjectId(?:\s*[:=]\s*|\s+|$)(.*)$", line)
+                  if match:
+                      project_id = match.group(1).strip()
+
+          enabled = bool(project_id)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"enabled={str(enabled).lower()}\n")
+          if not enabled:
+              print("Skipping 67minecraft publish: 67minecraftProjectId is not configured.")
+
   release-tags:
     uses: GTNewHorizons/GTNH-Actions-Workflows/.github/workflows/release-tags.yml@master
     with:
@@ -75,8 +108,9 @@ jobs:
       MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
 
   publish-67minecraft:
-    needs: release-tags
-    uses: AngelicIndustries/67minecraft-gradle-publish/.github/workflows/publish-67minecraft.yml@72186f2f16c887cb296d91681bfd597daddeecb1
+    needs: [release-tags, check-67minecraft]
+    if: needs.check-67minecraft.outputs.enabled == 'true'
+    uses: AngelicIndustries/67minecraft-gradle-publish/.github/workflows/publish-67minecraft.yml@1.0.4
     with:
       release-version: ${{ inputs.release-version }}
       asset-pattern: ${{ inputs.asset-pattern }}

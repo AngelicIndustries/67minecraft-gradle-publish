@@ -45,13 +45,48 @@ on:
         default: "help"
     secrets:
       SIX_SEVEN_TOKEN:
-        required: true
+        required: false
 
 permissions:
   contents: read
 
 jobs:
+  check-67minecraft:
+    runs-on: ubuntu-24.04
+    outputs:
+      enabled: ${{ steps.project.outputs.enabled }}
+    steps:
+      - name: Checkout mod repo
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: gradle.properties
+          sparse-checkout-cone-mode: false
+
+      - name: Check 67minecraft project ID
+        id: project
+        shell: python
+        run: |
+          import os
+          import re
+          from pathlib import Path
+
+          properties = Path("gradle.properties")
+          project_id = ""
+          if properties.is_file():
+              for line in properties.read_text().splitlines():
+                  match = re.match(r"^\s*67minecraftProjectId(?:\s*[:=]\s*|\s+|$)(.*)$", line)
+                  if match:
+                      project_id = match.group(1).strip()
+
+          enabled = bool(project_id)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"enabled={str(enabled).lower()}\n")
+          if not enabled:
+              print("Skipping 67minecraft publish: 67minecraftProjectId is not configured.")
+
   publish:
+    needs: check-67minecraft
+    if: needs.check-67minecraft.outputs.enabled == 'true'
     runs-on: ubuntu-24.04
     env:
       RELEASE_VERSION: ${{ inputs.release-version || github.ref_name }}
