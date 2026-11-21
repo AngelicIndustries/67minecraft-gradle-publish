@@ -98,7 +98,7 @@ jobs:
               print("Skipping 67minecraft publish: 67minecraftProjectId is not configured.")
 
   release-tags:
-    uses: GTNewHorizons/GTNH-Actions-Workflows/.github/workflows/release-tags.yml@master
+    uses: AngelicIndustries/GTNH-Actions-Workflows/.github/workflows/release-tags.yml@master
     with:
       workspace: ${{ inputs.workspace }}
     secrets:
@@ -110,7 +110,7 @@ jobs:
   publish-67minecraft:
     needs: [release-tags, check-67minecraft]
     if: needs.check-67minecraft.outputs.enabled == 'true'
-    uses: AngelicIndustries/67minecraft-gradle-publish/.github/workflows/publish-67minecraft.yml@1.0.4
+    uses: AngelicIndustries/67minecraft-gradle-publish/.github/workflows/publish-67minecraft.yml@1.0.5
     with:
       release-version: ${{ inputs.release-version }}
       asset-pattern: ${{ inputs.asset-pattern }}
