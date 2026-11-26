@@ -736,6 +736,43 @@ val setModrinthEnvironment = tasks.register("setModrinthEnvironment") {
 	}
 }
 
+// CurseForge's environment tags, inferred from modrinthEnvironment so a mod sets its sides once (the GTNH
+// buildscript tags none). Mods without it keep using curseForgeEnvironments.
+fun curseForgeEnvironmentTags(): List<String> =
+	when (modrinthEnvironment()) {
+		"client_only", "singleplayer_only" -> listOf("Client")
+		"server_only", "dedicated_server_only" -> listOf("Server")
+		null -> splitList(prop("curseForgeEnvironments")).mapNotNull {
+			when (it.lowercase()) {
+				"client" -> "Client"
+				"server" -> "Server"
+				else -> null
+			}
+		}.distinct()
+		else -> listOf("Client", "Server")
+	}
+
+tasks.matching { it.javaClass.name.startsWith("net.darkhax.curseforgegradle.TaskPublishCurseForge") }.configureEach {
+	doFirst {
+		val tags = curseForgeEnvironmentTags()
+		if (tags.isEmpty()) return@doFirst
+		// By reflection: CurseForgeGradle is on the build's classpath, not necessarily this script's.
+		val artifacts = javaClass.methods.firstOrNull { it.name == "getUploadArtifacts" && it.parameterCount == 0 }
+			?.invoke(this) as? Iterable<*>
+			?: throw GradleException("Can't read the upload artifacts of $name to tag their CurseForge environments.")
+		for (artifact in artifacts) {
+			// addEnvironment(Object...) in CurseForgeGradle 1.3, maybe String... elsewhere: match the array it takes.
+			val add = artifact!!.javaClass.methods.firstOrNull {
+				it.name == "addEnvironment" && it.parameterCount == 1 && it.parameterTypes[0].isArray
+			} ?: throw GradleException("CurseForgeGradle's UploadArtifact has no addEnvironment to tag environments.")
+			val values = java.lang.reflect.Array.newInstance(add.parameterTypes[0].componentType, tags.size)
+			tags.forEachIndexed { i, tag -> java.lang.reflect.Array.set(values, i, tag) }
+			add.invoke(artifact, values)
+		}
+		println("CurseForge environments: ${tags.joinToString()}.")
+	}
+}
+
 // Minotaur's upload task. The GTNH buildscript adds it to publish only when MODRINTH_TOKEN is set.
 tasks.matching { it.name == "modrinth" }.configureEach {
 	finalizedBy(setModrinthEnvironment)
