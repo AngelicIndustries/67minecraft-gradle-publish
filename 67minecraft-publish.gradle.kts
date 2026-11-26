@@ -653,6 +653,94 @@ val publish67Minecraft = tasks.register("publish67Minecraft") {
 	}
 }
 
+// Modrinth's side types became a per-version environment. The GTNH buildscript's upload leaves it unset, so a new
+// project's versions read "unknown" and Modrinth's review asks for it (later versions copy the previous one's). Set it
+// on the version Minotaur uploaded: from modrinthEnvironment, else from a one-sided curseForgeEnvironments.
+val modrinthEnvironments = listOf(
+	"client_only", "client_only_server_optional", "singleplayer_only", "server_only", "server_only_client_optional",
+	"dedicated_server_only", "client_and_server", "client_or_server", "client_or_server_prefers_both",
+)
+
+fun modrinthEnvironment(): String? {
+	val explicit = prop("modrinthEnvironment")
+	if (explicit != null) {
+		if (explicit !in modrinthEnvironments) {
+			throw GradleException("modrinthEnvironment must be one of ${modrinthEnvironments.joinToString()}, not '$explicit'")
+		}
+		return explicit
+	}
+	return when (splitList(prop("curseForgeEnvironments")).map { it.lowercase() }.toSet()) {
+		setOf("client") -> "client_only"
+		setOf("server") -> "server_only"
+		else -> null
+	}
+}
+
+fun modrinthRequest(method: String, url: String, token: String, body: String? = null): Pair<Int, String> {
+	val request = java.net.http.HttpRequest.newBuilder(URI(url))
+		.header("Authorization", token)
+		.header("User-Agent", "67minecraft-gradle-publish")
+		.header("Accept", "application/json")
+	if (body != null) request.header("Content-Type", "application/json")
+	request.method(
+		method,
+		if (body == null) java.net.http.HttpRequest.BodyPublishers.noBody()
+		else java.net.http.HttpRequest.BodyPublishers.ofString(body),
+	)
+	val response = java.net.http.HttpClient.newHttpClient()
+		.send(request.build(), java.net.http.HttpResponse.BodyHandlers.ofString())
+	return response.statusCode() to response.body().orEmpty()
+}
+
+val setModrinthEnvironment = tasks.register("setModrinthEnvironment") {
+	group = "publishing"
+	description = "Sets the Modrinth environment of this mod version (modrinthEnvironment in gradle.properties)."
+	notCompatibleWithConfigurationCache("Calls the Modrinth API using project state at execution time.")
+
+	onlyIf("modrinthProjectId is configured") {
+		prop("modrinthProjectId") != null
+	}
+
+	doLast {
+		val environment = modrinthEnvironment()
+		if (environment == null) {
+			println("No modrinthEnvironment set and curseForgeEnvironments isn't one side: Modrinth environment left as is.")
+			return@doLast
+		}
+		val token = env("MODRINTH_TOKEN")
+			?: throw GradleException("Missing environment variable: MODRINTH_TOKEN")
+		val projectId = prop("modrinthProjectId")!!
+		val versionNumber = project.version.toString()
+		val (listCode, listBody) = modrinthRequest(
+			"GET",
+			"https://api.modrinth.com/v2/project/${encodePathSegment(projectId)}/version",
+			token,
+		)
+		if (listCode !in 200..299) {
+			throw GradleException("Failed to list Modrinth versions of '$projectId' with HTTP $listCode:\n$listBody")
+		}
+		@Suppress("UNCHECKED_CAST")
+		val versions = groovy.json.JsonSlurper().parseText(listBody) as List<Map<String, Any?>>
+		val versionId = versions.firstOrNull { it["version_number"] == versionNumber }?.get("id") as String?
+			?: throw GradleException("Modrinth project '$projectId' has no version '$versionNumber' to set the environment of.")
+		val (code, body) = modrinthRequest(
+			"PATCH",
+			"https://api.modrinth.com/v3/version/${encodePathSegment(versionId)}",
+			token,
+			jsonValue(mapOf("environment" to environment)),
+		)
+		if (code !in 200..299) {
+			throw GradleException("Failed to set the Modrinth environment of version '$versionId' with HTTP $code:\n$body")
+		}
+		println("Modrinth version $versionNumber ($versionId): environment $environment.")
+	}
+}
+
+// Minotaur's upload task. The GTNH buildscript adds it to publish only when MODRINTH_TOKEN is set.
+tasks.matching { it.name == "modrinth" }.configureEach {
+	finalizedBy(setModrinthEnvironment)
+}
+
 afterEvaluate {
 	publish67Minecraft.configure {
 		if (prop("67minecraftProjectId") == null) return@configure
